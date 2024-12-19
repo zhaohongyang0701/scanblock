@@ -5,7 +5,7 @@ displayName: Scan Block
 type: middleware
 
 # The import path of your plugin.
-import: "github.com/safing/scanblock"
+import: "github.com/zhaohongyang0701/scanblock"
 
 # A brief description of what your plugin is doing.
 summary: Blocks scanner IPs by counting 4xx status codes until a limit is hit.
