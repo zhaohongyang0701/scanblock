@@ -19,6 +19,11 @@ const (
 	XRealIp                = "X-Real-Ip"
 )
 
+type Checker struct {
+	allowIPs    []*net.IP
+	allowIPsNet []*net.IPNet
+}
+
 // Config is the plugin configuration.
 type Config struct {
 	// MinScanRequests defines the minimum 4xx responses to observe before
@@ -47,6 +52,8 @@ type Config struct {
 	// RememberSeconds defines for how many seconds information about an IP
 	// should be cached after it was last seen.
 	RememberSeconds int
+
+	IPAllowList []string `json:"ipAllowList,omitempty"`
 }
 
 // CreateConfig creates the default plugin configuration.
@@ -56,10 +63,11 @@ func CreateConfig() *Config {
 
 // ScanBlock is a scan blocking plugin.
 type ScanBlock struct {
-	next   http.Handler
-	name   string
-	config *Config
-	cache  *Cache
+	next    http.Handler
+	name    string
+	config  *Config
+	checker *Checker
+	cache   *Cache
 }
 
 type BlockLog struct {
@@ -68,8 +76,8 @@ type BlockLog struct {
 	Ip        string `json:"ip"`
 	FindTime  string `json:"findTime"`
 	BlockTime string `json:"blockTime"`
-	Total     string `json:"total"`
-	Err       string `json:"err"`
+	Total     uint64 `json:"total"`
+	Err       uint64 `json:"err"`
 }
 
 // New created a new plugin.
@@ -88,15 +96,18 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		config.RememberSeconds = DefaultRememberSeconds
 	}
 
+	checker := NewChecker(config.IPAllowList)
+
 	// Log the instantiation of the plugin, including configuration.
 	fmt.Fprintf(os.Stdout, "creating scanblock plugin %q with config: %+v\n", name, config)
 
 	// Return new plugin instance.
 	return &ScanBlock{
-		next:   next,
-		name:   name,
-		config: config,
-		cache:  NewCache(),
+		next:    next,
+		name:    name,
+		config:  config,
+		checker: checker,
+		cache:   NewCache(),
 	}, nil
 }
 
@@ -153,6 +164,10 @@ func (sb *ScanBlock) check(r *http.Request) (entry *CacheEntry, ok bool) {
 		return nil, false
 	}
 
+	if sb.checker != nil && sb.checker.ContainsIP(remoteIP) {
+		return nil, false
+	}
+
 	// Get entry from cache.
 	ipString := remoteIP.String()
 	entry = sb.cache.GetEntry(ipString)
@@ -195,10 +210,10 @@ func (sb *ScanBlock) check(r *http.Request) (entry *CacheEntry, ok bool) {
 			Type:      "scanblock_plugin",
 			Name:      sb.name,
 			Ip:        ipString,
-			FindTime:  string(time.Since(time.Unix(entry.FirstSeen.Load(), 0)).Round(time.Second)),
-			BlockTime: string(time.Duration(sb.config.BlockSeconds) * time.Second),
-			Total:     string(entry.TotalRequests.Load()),
-			Err:       string(entry.ScanRequests.Load()),
+			FindTime:  time.Since(time.Unix(entry.FirstSeen.Load(), 0)).Round(time.Second).String(),
+			BlockTime: (time.Duration(sb.config.BlockSeconds) * time.Second).String(),
+			Total:     entry.TotalRequests.Load(),
+			Err:       entry.ScanRequests.Load(),
 		}
 		jsonData, err := json.Marshal(b)
 		if err != nil {
@@ -211,4 +226,43 @@ func (sb *ScanBlock) check(r *http.Request) (entry *CacheEntry, ok bool) {
 		entry.Blocking.Store(true)
 		return nil, true
 	}
+}
+
+func NewChecker(allowIPs []string) *Checker {
+	if len(allowIPs) == 0 {
+		return nil
+	}
+
+	checker := &Checker{}
+
+	for _, ipMask := range allowIPs {
+		if ipAddr := net.ParseIP(ipMask); ipAddr != nil {
+			checker.allowIPs = append(checker.allowIPs, &ipAddr)
+		} else {
+			_, ipAddr, err := net.ParseCIDR(ipMask)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "scanblock plugin failed to parsing CIDR IPs %s: %w", ipAddr, err)
+				return nil
+			}
+			checker.allowIPsNet = append(checker.allowIPsNet, ipAddr)
+		}
+	}
+
+	return checker
+}
+
+func (ip *Checker) ContainsIP(addr net.IP) bool {
+	for _, allowIP := range ip.allowIPs {
+		if allowIP.Equal(addr) {
+			return true
+		}
+	}
+
+	for _, allowNet := range ip.allowIPsNet {
+		if allowNet.Contains(addr) {
+			return true
+		}
+	}
+
+	return false
 }

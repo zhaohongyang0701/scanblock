@@ -8,7 +8,7 @@ type: middleware
 import: "github.com/zhaohongyang0701/scanblock"
 
 # A brief description of what your plugin is doing.
-summary: Blocks scanner IPs by counting 4xx status codes until a limit is hit.
+summary: Blocks scanner IPs(X-Real-Ip) by counting 4xx status codes until a limit is hit.
 
 # Medias associated to the plugin (optional)
 # iconPath: foo/icon.png
@@ -18,10 +18,13 @@ summary: Blocks scanner IPs by counting 4xx status codes until a limit is hit.
 # This is mandatory,
 # and Plugins Catalog will try to execute the plugin with the data you provide as part of its startup validity tests.
 testData:
-  minScanRequests: 2
-  minTotalRequests: 4
+  minScanRequests: 20
+  minTotalRequests: 100
   minScanPercent: 50
-  blockPrivate: true
+  blockPrivate: false
   playGames: false
   blockSeconds: 5
   rememberSeconds: 10
+  ipAllowList:
+    - 24.0.0.0/12
+    - 24.16.0.0/13
